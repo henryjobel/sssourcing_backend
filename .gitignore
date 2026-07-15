@@ -1,0 +1,23 @@
+node_modules/
+dist/
+
+# Environment variables and local overrides
+.env
+.env.*
+!.env.example
+
+# Runtime files
+public/uploads/*
+!public/uploads/.gitkeep
+*.log
+logs/
+
+# Test and coverage output
+coverage/
+.nyc_output/
+
+# OS and editor files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
