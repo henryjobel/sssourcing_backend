@@ -25,6 +25,7 @@ let users;
 let contentCollection;
 let messages;
 let media;
+let databaseReady;
 
 const adminEmail = (process.env.ADMIN_EMAIL || "admin@ssssourcing.com").toLowerCase();
 const adminPassword = process.env.ADMIN_PASSWORD || "ChangeMe123!";
@@ -34,6 +35,47 @@ const jwtSecret = process.env.JWT_SECRET || "development-only-change-this-secret
 app.disable("x-powered-by");
 app.use(express.json({ limit: "4mb" }));
 app.use("/uploads", express.static(uploadDir, { maxAge: "7d" }));
+
+async function initializeDatabase() {
+  if (!databaseReady) {
+    databaseReady = (async () => {
+      await mongoClient.connect();
+      await mongoClient.db("admin").command({ ping: 1 });
+      const db = mongoClient.db(databaseName);
+      users = db.collection("users");
+      contentCollection = db.collection("content");
+      messages = db.collection("messages");
+      media = db.collection("media");
+      await Promise.all([
+        users.createIndex({ email: 1 }, { unique: true }),
+        contentCollection.createIndex({ key: 1 }, { unique: true }),
+        messages.createIndex({ createdAt: -1 }),
+        media.createIndex({ publicId: 1 }, { unique: true }),
+        media.createIndex({ originalPath: 1 }, { unique: true }),
+      ]);
+      const existingUser = await users.findOne({ email: adminEmail });
+      if (!existingUser) {
+        await users.insertOne({ email: adminEmail, password_hash: bcrypt.hashSync(adminPassword, 12), name: "Administrator", createdAt: new Date() });
+      }
+    })().catch((error) => {
+      databaseReady = undefined;
+      throw error;
+    });
+  }
+  return databaseReady;
+}
+
+app.use(async (_req, _res, next) => {
+  try {
+    await initializeDatabase();
+    next();
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/", (_req, res) => res.json({ service: "SSS Sourcing API", status: "ok" }));
+app.get("/api/health", (_req, res) => res.json({ status: "ok", database: "connected" }));
 
 function auth(req, res, next) {
   const token = req.headers.authorization?.replace(/^Bearer\s+/i, "");
@@ -184,32 +226,19 @@ app.use((error, _req, res, _next) => {
 });
 
 async function start() {
-  await mongoClient.connect();
-  await mongoClient.db("admin").command({ ping: 1 });
-  const db = mongoClient.db(databaseName);
-  users = db.collection("users");
-  contentCollection = db.collection("content");
-  messages = db.collection("messages");
-  media = db.collection("media");
-  await Promise.all([
-    users.createIndex({ email: 1 }, { unique: true }),
-    contentCollection.createIndex({ key: 1 }, { unique: true }),
-    messages.createIndex({ createdAt: -1 }),
-    media.createIndex({ publicId: 1 }, { unique: true }),
-    media.createIndex({ originalPath: 1 }, { unique: true }),
-  ]);
-  const existingUser = await users.findOne({ email: adminEmail });
-  if (!existingUser) {
-    await users.insertOne({ email: adminEmail, password_hash: bcrypt.hashSync(adminPassword, 12), name: "Administrator", createdAt: new Date() });
-  }
+  await initializeDatabase();
   app.listen(port, () => console.log(`SSS Sourcing server running on http://localhost:${port} (MongoDB: ${databaseName})`));
 }
 
-start().catch((error) => {
-  console.error("Could not start server:", error.message);
-  process.exit(1);
-});
+if (!process.env.VERCEL) {
+  start().catch((error) => {
+    console.error("Could not start server:", error.message);
+    process.exit(1);
+  });
+}
 
 for (const signal of ["SIGINT", "SIGTERM"]) {
   process.on(signal, async () => { await mongoClient.close(); process.exit(0); });
 }
+
+export default app;
