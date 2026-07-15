@@ -32,9 +32,15 @@ const adminPassword = process.env.ADMIN_PASSWORD || "ChangeMe123!";
 const app = express();
 const port = Number(process.env.PORT || 4000);
 const jwtSecret = process.env.JWT_SECRET || "development-only-change-this-secret";
+const allowedOrigins = new Set((process.env.CORS_ORIGINS || "https://ssssourcing.com,https://www.ssssourcing.com,http://localhost:5173")
+  .split(",").map((origin) => origin.trim()).filter(Boolean));
 app.disable("x-powered-by");
 app.use((req, res, next) => {
-  res.setHeader("Access-Control-Allow-Origin", "*");
+  const origin = req.headers.origin;
+  if (origin && allowedOrigins.has(origin)) {
+    res.setHeader("Access-Control-Allow-Origin", origin);
+    res.setHeader("Vary", "Origin");
+  }
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
   if (req.method === "OPTIONS") return res.sendStatus(204);
