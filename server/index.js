@@ -1,4 +1,4 @@
-import "dotenv/config";
+import dotenv from "dotenv";
 import express from "express";
 import multer from "multer";
 import bcrypt from "bcryptjs";
@@ -11,6 +11,10 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, "..");
+dotenv.config({ path: path.join(root, ".env") });
+if (!process.env.MONGODB_URI) {
+  dotenv.config({ path: path.resolve(root, "../frontend/.env") });
+}
 const uploadDir = path.join(root, "public", "uploads");
 fs.mkdirSync(uploadDir, { recursive: true });
 
@@ -20,7 +24,6 @@ const mongoClient = new MongoClient(mongoUri, {
   serverApi: { version: ServerApiVersion.v1, strict: true, deprecationErrors: true },
 });
 const databaseName = process.env.MONGODB_DB || "sssourcing";
-if (!process.env.CLOUDINARY_URL) throw new Error("CLOUDINARY_URL is required for media uploads.");
 let users;
 let contentCollection;
 let messages;
@@ -143,7 +146,7 @@ app.put("/api/content", auth, async (req, res, next) => {
   const incomingSources = new Set(incomingProducts.map((product) => product?.sourcePath).filter(Boolean));
   const protectedProducts = existingProducts.filter((product) => (
     typeof product?.sourcePath === "string"
-    && product.sourcePath.startsWith("/assets/products photos/")
+    && ["/assets/products photos/", "/assets/tshirt/"].some((prefix) => product.sourcePath.startsWith(prefix))
     && !incomingSources.has(product.sourcePath)
   ));
   if (protectedProducts.length && incomingProducts.length < existingProducts.length) {
@@ -162,6 +165,44 @@ app.post("/api/upload", auth, upload.single("file"), async (req, res, next) => {
   try {
   if (!req.file) return res.status(400).json({ error: "Choose a supported image, video or PDF" });
   const baseName = path.basename(req.file.originalname, path.extname(req.file.originalname)).replace(/[^a-z0-9-]/gi, "-").slice(0, 60) || "media";
+  const isPdf = req.file.mimetype === "application/pdf" || req.file.originalname.toLowerCase().endsWith(".pdf");
+
+  if (isPdf) {
+    const filename = `${Date.now()}-${baseName}.pdf`;
+    const targetDirs = [
+      uploadDir,
+      path.resolve(root, "../frontend/public/uploads"),
+      path.resolve(root, "public/uploads"),
+    ];
+    for (const dir of targetDirs) {
+      try {
+        if (fs.existsSync(path.dirname(dir))) {
+          fs.mkdirSync(dir, { recursive: true });
+          fs.writeFileSync(path.join(dir, filename), req.file.buffer);
+        }
+      } catch { /* ignore */ }
+    }
+    const localUrl = `/uploads/${filename}`;
+    if (media) {
+      await media.updateOne(
+        { publicId: filename },
+        { $set: {
+          originalPath: localUrl,
+          name: req.file.originalname,
+          url: localUrl,
+          publicId: filename,
+          resourceType: "raw",
+          format: "pdf",
+          bytes: req.file.size || req.file.buffer?.length || 0,
+          updatedAt: new Date(),
+        }, $setOnInsert: { createdAt: new Date() } },
+        { upsert: true },
+      );
+    }
+    return res.status(201).json({ url: localUrl, name: req.file.originalname, publicId: filename });
+  }
+
+  if (!process.env.CLOUDINARY_URL) return res.status(503).json({ error: "CLOUDINARY_URL is required for media uploads" });
   const result = await new Promise((resolve, reject) => {
     const stream = cloudinary.uploader.upload_stream({
       folder: "sssourcing",
